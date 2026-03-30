@@ -1,6 +1,6 @@
 {
   "name": "seqmig",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Sequelize auto-migration CLI",
   "main": "dist/index.js",
   "bin": {
@@ -41,6 +41,7 @@
   "devDependencies": {
     "@changesets/cli": "^2.29.8",
     "@types/node": "^24.10.1",
+    "terser": "^5.46.1",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   }

@@ -1,5 +1,11 @@
 # seqmig
 
+## 2.0.1
+
+### Patch Changes
+
+- Minified the code with terser
+
 ## 2.0.0
 
 ### Major Changes
