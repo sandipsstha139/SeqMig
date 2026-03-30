@@ -170,7 +170,7 @@ function col(c: ColumnSchema): string {
     if (c.defaultValue === "NOW") {
       defaultValue = 'Sequelize.fn("NOW")';
     } else if (c.defaultValue === "UUID_FUNCTION") {
-      defaultValue = 'Sequelize.fn("gen_random_uuid")';
+      defaultValue = "Sequelize.UUIDV4";
     } else if (c.defaultValue !== null && c.defaultValue !== undefined) {
       const defaultStr = String(c.defaultValue);
 
@@ -183,7 +183,7 @@ function col(c: ColumnSchema): string {
           c.name === "id" &&
           (c.type === "UUID" || c.dbType?.includes("UUID"))
         ) {
-          defaultValue = 'Sequelize.fn("gen_random_uuid")';
+          defaultValue = "Sequelize.UUIDV4";
         } else {
           defaultValue = "Sequelize.UUIDV4";
         }
@@ -197,7 +197,7 @@ function col(c: ColumnSchema): string {
       c.primaryKey &&
       (c.type === "UUID" || c.dbType?.includes("UUID"))
     ) {
-      defaultValue = 'Sequelize.fn("gen_random_uuid")';
+      defaultValue = "Sequelize.UUIDV4";
     }
 
     parts.push(`defaultValue: ${defaultValue}`);

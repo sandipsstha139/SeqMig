@@ -349,7 +349,10 @@ export async function introspectDatabase(): Promise<{
       if (defStr.toLowerCase().includes("now()")) {
         defaultValue = "NOW";
         hasDefault = true;
-      } else if (defStr.includes("gen_random_uuid")) {
+      } else if (
+        defStr.includes("gen_random_uuid") ||
+        defStr.includes("uuid_generate_v4")
+      ) {
         defaultValue = "UUID_FUNCTION";
         hasDefault = true;
       } else if (!hasDefault) {
