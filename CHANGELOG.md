@@ -1,5 +1,12 @@
 # seqmig
 
+## 1.2.2
+
+### Patch Changes
+
+- **Windows:** Fixed snapshot directory resolution so absolute paths from config are not joined again with `process.cwd()` (which caused invalid paths like `…\project\C:\…\.seqmig\snapshots` and broke `generate` / `saveSnapshot`).
+- **Windows:** Model loading now uses `pathToFileURL` for dynamic `import()` of model files on disk.
+
 ## 1.2.0
 
 ### Minor Changes

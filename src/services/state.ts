@@ -11,25 +11,31 @@ import type {
 
 const GENERATOR_LABEL = "seqmig@2";
 
+/**
+ * Resolve a configured directory relative to cwd, or pass through if already absolute.
+ * Never use `path.join(process.cwd(), absolutePath)` on Windows — it produces a doubled path.
+ */
+function resolveRootDir(root: string): string {
+  return path.isAbsolute(root) ? root : path.resolve(process.cwd(), root);
+}
+
 export function getSnapshotPaths() {
   const cfg = loadSeqmigConfig();
 
-  const snapshotDir = cfg.snapshotDir || ".seqmig/snapshots";
-  const migrationDir = cfg.migrationDir || "migrations";
+  const snapshotDir = resolveRootDir(cfg.snapshotDir || ".seqmig/snapshots");
+  const migrationDir = resolveRootDir(cfg.migrationDir || "migrations");
 
-  const SNAPSHOT_FILE = path.join(
-    process.cwd(),
-    snapshotDir,
-    "schema-snapshot.json"
-  );
-  const SNAPSHOT_DB_FILE = path.join(
-    process.cwd(),
-    snapshotDir,
-    "schema-snapshot-db.json"
-  );
-  const SNAPSHOT_BACKUP_DIR = path.join(process.cwd(), snapshotDir, "backups");
+  const SNAPSHOT_FILE = path.join(snapshotDir, "schema-snapshot.json");
+  const SNAPSHOT_DB_FILE = path.join(snapshotDir, "schema-snapshot-db.json");
+  const SNAPSHOT_BACKUP_DIR = path.join(snapshotDir, "backups");
 
-  return { SNAPSHOT_FILE, SNAPSHOT_DB_FILE, SNAPSHOT_BACKUP_DIR, migrationDir, snapshotDir };
+  return {
+    SNAPSHOT_FILE,
+    SNAPSHOT_DB_FILE,
+    SNAPSHOT_BACKUP_DIR,
+    migrationDir,
+    snapshotDir,
+  };
 }
 
 function normalizeForeignKeyForCompare(fk: any): ForeignKeySchema {
