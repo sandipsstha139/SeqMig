@@ -1,5 +1,14 @@
 # seqmig
 
+## 2.0.2
+
+### Patch Changes
+
+- Improved `paranoid` model handling so generated `deletedAt` columns remain nullable by default.
+- Updated foreign-key index generation to ensure FK indexes are consistently created unless an equivalent index already exists.
+- Updated CLI help configuration to use `helpCommand(...)` (Commander v14-friendly, non-deprecated API).
+- Expanded documentation with migration guidelines and pro tips for predictable generation.
+
 ## 2.0.1
 
 ### Patch Changes

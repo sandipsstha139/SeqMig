@@ -309,26 +309,15 @@ function isManyToManyJoinTable(
   });
 }
 
-function columnsPrefixMatch(prefix: string[], full: string[]): boolean {
-  if (prefix.length > full.length) return false;
-  return prefix.every((c, i) => c === full[i]);
-}
-
-function hasCoveringConstraint(
+function hasEquivalentIndex(
   fkCols: string[],
   indexes: IndexSchema[],
-  uniques: UniqueConstraintSchema[],
-  primaryKeys: string[],
 ): boolean {
-  const coveredByIndex = indexes.some((idx) =>
-    columnsPrefixMatch(fkCols, idx.columns),
+  return indexes.some(
+    (idx) =>
+      idx.columns.length === fkCols.length &&
+      idx.columns.every((c, i) => c === fkCols[i]),
   );
-  if (coveredByIndex) return true;
-
-  const coveredByUnique = uniques.some((u) => columnsPrefixMatch(fkCols, u.columns));
-  if (coveredByUnique) return true;
-
-  return columnsPrefixMatch(fkCols, primaryKeys);
 }
 
 function getModelTableId(m: ModelCtor<Model>): {
@@ -410,6 +399,17 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
     const tableName = tid.name;
     const tableSchema = tid.schema;
     const attrs = m.getAttributes();
+    const modelOpts = m.options as {
+      paranoid?: boolean;
+      deletedAt?: string | boolean;
+    };
+    const paranoidEnabled = modelOpts.paranoid === true;
+    const deletedAtColumnName =
+      typeof modelOpts.deletedAt === "string"
+        ? modelOpts.deletedAt
+        : modelOpts.deletedAt === false
+          ? null
+          : "deletedAt";
     const columns: ColumnSchema[] = Object.entries(attrs)
       .filter(([, a]) => {
         const attr = a as unknown as Record<string, unknown>;
@@ -499,6 +499,9 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
         allowNull = false;
       } else if (hasExplicitAllowNull) {
         allowNull = attr.allowNull !== false;
+      } else if (paranoidEnabled && deletedAtColumnName === name) {
+        // Paranoid soft-delete column must stay nullable.
+        allowNull = true;
       } else {
         // Strict default: if not explicitly declared, keep column NOT NULL.
         allowNull = false;
@@ -795,7 +798,7 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
 
     foreignKeys.forEach((fk) => {
       if (!fk.columns.length) return;
-      if (hasCoveringConstraint(fk.columns, indexes, uniques, primaryKeys)) return;
+      if (hasEquivalentIndex(fk.columns, indexes)) return;
       const baseName = `${tableName}_${fk.columns.join("_")}_fkey_idx`;
       indexes.push({
         name: nextAvailableIndexName(baseName),
