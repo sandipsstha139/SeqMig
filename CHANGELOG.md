@@ -1,5 +1,27 @@
 # seqmig
 
+## 2.0.0
+
+### Major Changes
+
+- **Breaking:** Removed DB-baseline/drift workflow and related CLI/API surface.
+  - Removed `--from-db` option.
+  - Removed `validate-db` and `pull-db` commands.
+  - Removed DB-introspection service export and implementation.
+- **Breaking:** Nullability defaults are now strict for model introspection.
+  - If `allowNull` is not explicitly provided on a column, it defaults to `false`.
+  - Generated migrations now always emit explicit `allowNull`.
+
+### Minor Changes
+
+- Added `DATEONLY` mapping support (`DataType.DATEONLY` -> `Sequelize.DATEONLY`).
+- Excluded `DataType.VIRTUAL` columns from migration generation.
+- Updated string handling: plain `DataType.STRING` emits `Sequelize.STRING`, explicit lengths are preserved.
+- Added automatic foreign-key index generation when no covering index/unique/PK exists.
+- Foreign keys now default `onDelete` and `onUpdate` to `CASCADE` when omitted.
+- Added enum cleanup in `down` migrations via `DROP TYPE IF EXISTS ...`.
+- Improved default value normalization for Sequelize token-like defaults.
+
 ## 1.2.2
 
 ### Patch Changes

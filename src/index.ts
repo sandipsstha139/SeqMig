@@ -81,7 +81,9 @@ export async function runCli() {
   program
     .name("seqmig")
     .description("Sequelize auto-migration CLI")
-    .version(version);
+    .version(version)
+    .helpOption("-h, --help", "display help for command")
+    .helpCommand("help [command]", "display help for command");
 
   program
     .command("init")

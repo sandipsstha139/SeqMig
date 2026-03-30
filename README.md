@@ -1,20 +1,8 @@
 # SeqMig
 
-A powerful auto-migration CLI tool for Sequelize that automatically generates and manages database migrations based on your model changes.
+Snapshot-based auto-migration CLI for Sequelize / sequelize-typescript.
 
-## Overview
-
-SeqMig simplifies database schema management by automatically detecting changes in your Sequelize models and generating migration files. It uses `sequelize-cli` internally for migration execution while providing an intelligent schema introspection and diff system.
-
-## Features
-
-- **Automatic Migration Generation** - Detects model changes and generates migration files automatically
-- **Schema Snapshots** - Maintains snapshots of your database schema for accurate diff detection
-- **Smart Column Rename Detection** - Intelligently detects renamed columns based on similarity
-- **Relationship Handling** - Properly manages foreign keys, indexes, and constraints
-- **Backup System** - Automatic snapshot backups with restore capability
-- **Schema Validation** - Verify that your snapshot matches the actual database state
-- **TypeScript Support** - Full TypeScript support with `.ts` and `.js` model files
+SeqMig introspects your models, diffs them against a local schema snapshot, and generates transactional Sequelize migrations.
 
 ## Installation
 
@@ -24,95 +12,33 @@ npm install seqmig
 
 ## Quick Start
 
-1. **Initialize configuration**
-
 ```bash
 seqmig init
-```
-
-This creates a `.sequelizerc` file in your project root with default paths:
-
-```javascript
-{
-  config: "config/config.js",
-  "models-path": "models",
-  "migrations-path": "migrations",
-  "seeders-path": "seeders"
-}
-```
-
-2. **Preview schema changes**
-
-```bash
+seqmig rebuild
 seqmig preview
-```
-
-3. **Generate migration**
-
-```bash
-seqmig generate
-```
-
-4. **Run migrations**
-
-```bash
+seqmig generate -n add-users
 seqmig run
 ```
 
 ## Commands
 
-### `seqmig init`
-
-Initialize `.sequelizerc` configuration file with default paths.
-
-### `seqmig preview`
-
-Preview the schema differences between your current models and the last snapshot. Shows what migrations would be generated without actually creating them.
-
-### `seqmig generate`
-
-Generate a migration file based on detected schema changes. Updates the snapshot after generation.
-
-### `seqmig run`
-
-Execute all pending migrations using `sequelize-cli db:migrate`.
-
-### `seqmig rollback`
-
-Rollback the last applied migration using `sequelize-cli db:migrate:undo`.
-
-### `seqmig rebuild`
-
-Rebuild the schema snapshot from the current database state. Useful when starting with an existing database or after manual schema changes.
-
-### `seqmig validate`
-
-Validate that the current snapshot matches the actual database schema. Shows any discrepancies if found.
-
-### `seqmig introspect`
-
-Introspect and output the current database schema as JSON. Useful for debugging and understanding how SeqMig sees your schema.
-
-### `seqmig backups`
-
-List all available snapshot backups.
-
-### `seqmig restore <backup>`
-
-Restore a specific snapshot backup by filename.
-
-## How It Works
-
-1. **Schema Introspection**: SeqMig reads your Sequelize models and extracts the complete schema including columns, indexes, foreign keys, unique constraints, and check constraints.
-2. **Snapshot Management**: The current schema is stored as a JSON snapshot in `.seqmig/snapshots/schema-snapshot.json`. Each time you generate a migration, a backup is created.
-3. **Diff Detection**: When you run `seqmig preview` or `seqmig generate`, it compares the current model schema with the saved snapshot to detect changes.
-4. **Smart Rename Detection**: SeqMig uses similarity algorithms to detect column renames rather than treating them as drop + add operations.
-5. **Migration Generation**: Changes are converted into Sequelize migration operations and written to a timestamped migration file in your migrations directory.
-6. **Migration Execution**: Uses `sequelize-cli` to apply migrations to your database.
+- `seqmig init` - Create default `.sequelizerc`.
+- `seqmig preview` - Show diff actions (`snapshot -> models`) as JSON.
+- `seqmig generate [-n, --name <slug>]` - Generate migration + update snapshot.
+- `seqmig scaffold [-n, --name <slug>]` - Create blank migration (snapshot unchanged).
+- `seqmig run` - Run pending migrations.
+- `seqmig rollback` - Undo last migration.
+- `seqmig rebuild` - Rebuild snapshot from current models.
+- `seqmig validate` - Compare snapshot vs models and print drift summary.
+- `seqmig debug` / `seqmig summary` - High-signal debug summary for snapshot vs models.
+- `seqmig introspect` - Print model-introspected schema JSON.
+- `seqmig backups` - List snapshot backups.
+- `seqmig restore <backup>` - Restore a snapshot backup.
+- `seqmig --help` / `seqmig -h` / `seqmig help [command]` - Show CLI help.
 
 ## Configuration
 
-SeqMig uses the standard `.sequelizerc` file for configuration. You can customize:
+SeqMig reads paths from `.sequelizerc`:
 
 ```javascript
 const path = require("path");
@@ -122,59 +48,101 @@ module.exports = {
   "models-path": path.resolve("models"),
   "migrations-path": path.resolve("migrations"),
   "seeders-path": path.resolve("seeders"),
-  url: process.env.DATABASE_URL, // Optional: direct connection string
-  debug: false, // Optional: enable debug logging
-  "tsconfig-path": path.resolve("tsconfig.json"), // Optional: custom tsconfig
 };
 ```
 
+## Core Behavior
+
+### Snapshot Workflow
+
+1. Introspect models.
+2. Compare against `schema-snapshot.json`.
+3. Generate actions.
+4. Write migration and update snapshot.
+
+### Nullability Rules
+
+SeqMig now uses strict nullability defaults for model introspection:
+
+- If `allowNull` is explicitly set on `@Column`, that value is used.
+- If `allowNull` is not set, SeqMig treats the column as `allowNull: false`.
+- Generated migration columns always include explicit `allowNull: true|false`.
+
+### Foreign Key Defaults
+
+For generated FK constraints:
+
+- If `onDelete` / `onUpdate` are explicitly set, those are used.
+- If omitted, both default to `"CASCADE"`.
+
+### Index Behavior
+
+- FK indexes are auto-generated when a covering index/unique/PK does not already exist.
+- Explicit indexes from model metadata are preserved.
+
+### Type and Column Handling
+
+- `DataType.DATEONLY` maps to `Sequelize.DATEONLY`.
+- `DataType.VIRTUAL` fields are excluded from migrations.
+- `DataType.STRING` emits `Sequelize.STRING` (no forced `(255)`).
+- `DataType.STRING(n)` keeps explicit length.
+- UUID default tokens emit as `Sequelize.UUIDV4`.
+
+### ENUM Handling
+
+- ENUM columns are generated with `Sequelize.ENUM(...)`.
+- `down` cleanup drops generated enum types with `DROP TYPE IF EXISTS ...`.
+
+## Guidelines for Predictable Migrations
+
+Use these model-authoring rules if you want generated migrations to match your intent exactly:
+
+- Always set `allowNull` explicitly on every `@Column` (`true` or `false`).
+- Use explicit FK actions when needed:
+  - `onDelete` / `onUpdate` on associations or references.
+  - If omitted, SeqMig defaults both to `CASCADE`.
+- Keep non-persistent fields as `DataType.VIRTUAL`; they are intentionally excluded from migrations.
+- Use `DataType.DATEONLY` when you need date-only semantics; do not model it as `DATE`.
+- For strings, use:
+  - `DataType.STRING` for unrestricted default length.
+  - `DataType.STRING(n)` when length must be enforced.
+- Prefer explicit defaults in models (`defaultValue`) for stable migration output.
+- Define explicit indexes with model metadata where performance matters; SeqMig auto-adds FK indexes, but domain/query indexes should still be declared by you.
+- For enum stability, keep enum values and order intentional and review generated enum migrations before applying in production.
+
+## Pro Tips
+
+- Run `seqmig preview` before every `seqmig generate` to catch unintended changes early.
+- Keep migrations small and focused; avoid mixing unrelated schema changes in one file.
+- Review generated `down` blocks carefully, especially for enum and destructive operations.
+- Commit migration files and snapshot updates together in the same git commit.
+- For production releases, test `up` and `down` on a staging clone of real data.
+- When changing defaults or nullability on large tables, consider phased deployments to avoid long locks.
+- If you hand-edit a generated migration, keep snapshot consistency by running `seqmig validate` after changes.
+
 ## Supported Schema Elements
 
-- Tables (create, drop)
-- Columns (add, drop, alter, rename)
-- Primary Keys
-- Foreign Keys
+- Table create/drop/rename
+- Column add/drop/rename/alter
+- Primary keys
+- Foreign keys (single/composite)
+- Unique constraints
 - Indexes
-- Unique Constraints
-- Check Constraints
-- Data Types (including ENUMs and ARRAYs)
-- Default Values
-- Auto-increment
+- Check constraints
+- ENUM / ARRAY / JSON / JSONB / DATEONLY / DECIMAL precision
+- Default values (including common Sequelize tokens)
+- Table and column comments
 
-## Example Workflow
+## Example Migration Shape
 
-```bash
-# Initialize SeqMig
-seqmig init
-
-# Create initial snapshot
-seqmig rebuild
-
-# Make changes to your models
-# Preview what will change
-seqmig preview
-
-# Generate migration
-seqmig generate
-
-# Review the generated migration file
-# Run migrations
-seqmig run
-
-# If something goes wrong, rollback
-seqmig rollback
-```
-
-## Migration File Structure
-
-Generated migrations use transactions for safety:
+Generated migrations are transaction-wrapped:
 
 ```javascript
 module.exports = {
   async up(queryInterface, Sequelize) {
     const transaction = await queryInterface.sequelize.transaction();
     try {
-      // Migration operations here
+      // generated operations
       await transaction.commit();
     } catch (error) {
       await transaction.rollback();
@@ -184,7 +152,7 @@ module.exports = {
   async down(queryInterface, Sequelize) {
     const transaction = await queryInterface.sequelize.transaction();
     try {
-      // Rollback operations here
+      // reverse operations
       await transaction.commit();
     } catch (error) {
       await transaction.rollback();
@@ -194,85 +162,22 @@ module.exports = {
 };
 ```
 
-## Backup and Recovery
+## Backups
 
-SeqMig automatically maintains up to 20 snapshot backups. Each backup is timestamped and stored in `.seqmig/snapshots/backups/`.
+Snapshot backups are created automatically.
 
 ```bash
-# List available backups
 seqmig backups
-
-# Restore a specific backup
-seqmig restore snapshot-2024-12-01T10-30-00-000Z.json
+seqmig restore <backup-file>
 ```
-
-## Best Practices
-
-- Always preview before generating using `seqmig preview`
-- Review generated migrations before running them
-- Commit both migration files and snapshots to version control
-- Run `seqmig rebuild` after manual database modifications
-- Use `seqmig validate` regularly to ensure snapshot consistency
-- Test migrations in a development environment first
-
-## Troubleshooting
-
-### Snapshot out of sync
-
-```bash
-seqmig validate  # Check for discrepancies
-seqmig rebuild   # Rebuild from current database state
-```
-
-### Migration conflicts
-
-```bash
-seqmig rollback  # Rollback the problematic migration
-# Fix the issue
-seqmig generate  # Generate new migration
-seqmig run       # Try again
-```
-
-### Model loading issues
-
-Ensure your models are properly exported and located in the configured `models-path`.
 
 ## Limitations
 
-- **PostgreSQL only** - Primarily designed for PostgreSQL; other databases (MySQL, SQLite, MSSQL) have limited or no support.
-- **Imperfect rename detection** - Column and table renames may be misidentified as drop+add operations, risking data loss.
-- **No support for views** - Database views are completely ignored and not migrated.
-- **No support for stored procedures/functions** - Database functions, procedures, and triggers are not handled.
-- **Manual sync required** - Any database changes made outside SeqMig require manually running `seqmig rebuild`.
-- **No git branch awareness** - Single linear snapshot causes conflicts when working across multiple branches.
-- **No concurrent operation support** - Multiple developers generating migrations simultaneously can corrupt snapshots.
-- **ENUM changes need manual handling** - Adding/removing ENUM values may require manual migration adjustments.
-- **Junction table detection is heuristic-based** - May not correctly identify all many-to-many relationships.
-- **No migration preview for execution** - `seqmig run` executes immediately; must use `seqmig preview` before generating.
-- **No automatic drift detection** - Must manually run `seqmig validate` to check if snapshot is out of sync.
-- **Complex default values may fail** - Default values using complex functions may not serialize correctly.
-- **Dynamic models not supported** - Only file-based models can be introspected; runtime-created models are invisible.
-
-## Requirements
-
-- Node.js >= 16
-- Sequelize >= 6
-- sequelize-typescript >= 2
-- PostgreSQL (currently the primary supported dialect)
+- Designed primarily for PostgreSQL.
+- Rename detection is heuristic-based.
+- No views/procedures/triggers migration support.
+- Snapshot conflicts can occur across long-lived branches if not managed.
 
 ## License
 
 ISC
-
-## Author
-
-Sandip Shrestha (sandipstha139@gmail.com)
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-## Links
-
-- [Sequelize Documentation](https://sequelize.org/)
-- [sequelize-cli Documentation](https://github.com/sequelize/cli)
