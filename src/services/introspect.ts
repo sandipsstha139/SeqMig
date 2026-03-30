@@ -53,6 +53,34 @@ function importModelFile(absPath: string): Promise<any> {
   return import(pathToFileURL(absPath).href);
 }
 
+function parseTsNullabilityHints(
+  filePath: string,
+): Map<string, Map<string, boolean>> {
+  const hints = new Map<string, Map<string, boolean>>();
+  if (!filePath.endsWith(".ts")) return hints;
+  if (!fs.existsSync(filePath)) return hints;
+
+  const src = fs.readFileSync(filePath, "utf8");
+  const classRe =
+    /export\s+class\s+([A-Za-z_]\w*)[^{]*\{([\s\S]*?)^\}/gm;
+  let cm: RegExpExecArray | null;
+  while ((cm = classRe.exec(src)) !== null) {
+    const className = cm[1]!;
+    const body = cm[2]!;
+    const propHints = new Map<string, boolean>();
+    const propRe =
+      /(?:declare\s+)?(?:public\s+|private\s+|protected\s+|readonly\s+|static\s+)*([A-Za-z_]\w*)\s*([!?])\s*:\s*[^;]+;/g;
+    let pm: RegExpExecArray | null;
+    while ((pm = propRe.exec(body)) !== null) {
+      const propName = pm[1]!;
+      const marker = pm[2]!;
+      propHints.set(propName, marker === "?");
+    }
+    hints.set(className, propHints);
+  }
+  return hints;
+}
+
 function toScalar(db: string): ColumnSchema["type"] {
   const t = db.toUpperCase();
   if (t.includes("ARRAY")) return "ARRAY";
@@ -110,6 +138,34 @@ function isVirtualAttribute(attr: Record<string, unknown>): boolean {
   const ctor = String(typeObj?.constructor?.name ?? "").toUpperCase();
   const str = String(typeObj?.toString?.() ?? "").toUpperCase();
   return key === "VIRTUAL" || ctor === "VIRTUAL" || str.includes("VIRTUAL");
+}
+
+function isDateOnlyAttribute(attr: Record<string, unknown>): boolean {
+  const typeObj = attr.type as
+    | {
+        key?: unknown;
+        constructor?: { name?: string };
+        toString?: () => string;
+        toSql?: () => unknown;
+      }
+    | undefined;
+  const key = String(typeObj?.key ?? "").toUpperCase();
+  const ctor = String(typeObj?.constructor?.name ?? "").toUpperCase();
+  const str = String(typeObj?.toString?.() ?? "").toUpperCase();
+  let sql = "";
+  try {
+    if (typeof typeObj?.toSql === "function") {
+      sql = String(typeObj.toSql()).toUpperCase();
+    }
+  } catch {
+    // Ignore type objects that throw on SQL rendering.
+  }
+  return (
+    key === "DATEONLY" ||
+    ctor === "DATEONLY" ||
+    str.includes("DATEONLY") ||
+    sql.includes("DATEONLY")
+  );
 }
 
 function extractEnumValues(dbType: string): string[] | undefined {
@@ -342,10 +398,17 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
 
   const modelFiles = getAllModelFiles(modelsPath);
   const modelClasses: any[] = [];
+  const nullabilityHintsByClass = new Map<string, Map<string, boolean>>();
   for (const file of modelFiles) {
     const mod = await importModelFile(file);
     const modelClass = mod.default || Object.values(mod)[0];
     modelClasses.push(modelClass);
+    const fileHints = parseTsNullabilityHints(file);
+    fileHints.forEach((hints, className) => {
+      if (!nullabilityHintsByClass.has(className)) {
+        nullabilityHintsByClass.set(className, hints);
+      }
+    });
   }
   sequelize.addModels(modelClasses);
 
@@ -360,6 +423,8 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
     const tableName = tid.name;
     const tableSchema = tid.schema;
     const attrs = m.getAttributes();
+    const className = m.name;
+    const classHints = nullabilityHintsByClass.get(className) ?? new Map();
 
     const columns: ColumnSchema[] = Object.entries(attrs)
       .filter(([, a]) => {
@@ -374,6 +439,9 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
         ),
         attr,
       );
+      if (isDateOnlyAttribute(attr)) {
+        raw = "DATEONLY";
+      }
 
       const isArray =
         raw.toUpperCase().includes("ARRAY") ||
@@ -438,7 +506,20 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
       }
 
       const primaryKey = !!attr.primaryKey;
-      const allowNull = primaryKey ? false : attr.allowNull === true;
+      const hasExplicitAllowNull = Object.prototype.hasOwnProperty.call(
+        attr,
+        "allowNull",
+      );
+      let allowNull: boolean;
+      if (primaryKey) {
+        allowNull = false;
+      } else if (hasExplicitAllowNull) {
+        allowNull = attr.allowNull !== false;
+      } else if (classHints.has(name)) {
+        allowNull = classHints.get(name)!; // ? => true, ! => false
+      } else {
+        allowNull = true;
+      }
 
       const column: ColumnSchema = {
         name,
