@@ -53,34 +53,6 @@ function importModelFile(absPath: string): Promise<any> {
   return import(pathToFileURL(absPath).href);
 }
 
-function parseTsNullabilityHints(
-  filePath: string,
-): Map<string, Map<string, boolean>> {
-  const hints = new Map<string, Map<string, boolean>>();
-  if (!filePath.endsWith(".ts")) return hints;
-  if (!fs.existsSync(filePath)) return hints;
-
-  const src = fs.readFileSync(filePath, "utf8");
-  const classRe =
-    /export\s+class\s+([A-Za-z_]\w*)[^{]*\{([\s\S]*?)^\}/gm;
-  let cm: RegExpExecArray | null;
-  while ((cm = classRe.exec(src)) !== null) {
-    const className = cm[1]!;
-    const body = cm[2]!;
-    const propHints = new Map<string, boolean>();
-    const propRe =
-      /(?:declare\s+)?(?:public\s+|private\s+|protected\s+|readonly\s+|static\s+)*([A-Za-z_]\w*)\s*([!?])\s*:\s*[^;]+;/g;
-    let pm: RegExpExecArray | null;
-    while ((pm = propRe.exec(body)) !== null) {
-      const propName = pm[1]!;
-      const marker = pm[2]!;
-      propHints.set(propName, marker === "?");
-    }
-    hints.set(className, propHints);
-  }
-  return hints;
-}
-
 function toScalar(db: string): ColumnSchema["type"] {
   const t = db.toUpperCase();
   if (t.includes("ARRAY")) return "ARRAY";
@@ -420,17 +392,10 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
 
   const modelFiles = getAllModelFiles(modelsPath);
   const modelClasses: any[] = [];
-  const nullabilityHintsByClass = new Map<string, Map<string, boolean>>();
   for (const file of modelFiles) {
     const mod = await importModelFile(file);
     const modelClass = mod.default || Object.values(mod)[0];
     modelClasses.push(modelClass);
-    const fileHints = parseTsNullabilityHints(file);
-    fileHints.forEach((hints, className) => {
-      if (!nullabilityHintsByClass.has(className)) {
-        nullabilityHintsByClass.set(className, hints);
-      }
-    });
   }
   sequelize.addModels(modelClasses);
 
@@ -445,9 +410,6 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
     const tableName = tid.name;
     const tableSchema = tid.schema;
     const attrs = m.getAttributes();
-    const className = m.name;
-    const classHints = nullabilityHintsByClass.get(className) ?? new Map();
-
     const columns: ColumnSchema[] = Object.entries(attrs)
       .filter(([, a]) => {
         const attr = a as unknown as Record<string, unknown>;
@@ -537,10 +499,9 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
         allowNull = false;
       } else if (hasExplicitAllowNull) {
         allowNull = attr.allowNull !== false;
-      } else if (classHints.has(name)) {
-        allowNull = classHints.get(name)!; // ? => true, ! => false
       } else {
-        allowNull = true;
+        // Strict default: if not explicitly declared, keep column NOT NULL.
+        allowNull = false;
       }
 
       const column: ColumnSchema = {

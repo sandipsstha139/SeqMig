@@ -45,6 +45,10 @@ function fkRefOpts(fk: {
   )} }`;
 }
 
+function fkRuleOrCascade(rule: string | null | undefined): string {
+  return rule ?? "CASCADE";
+}
+
 function tableSqlIdent(tableSchema: string | undefined, tableName: string): string {
   const s = tableSchema?.trim() || "public";
   if (s === "public") return pgIdent(tableName);
@@ -158,9 +162,7 @@ function col(c: ColumnSchema): string {
   const parts: string[] = [];
 
   parts.push(`type: ${mapType(c.dbType, c.enumValues)}`);
-  if (c.allowNull === false) {
-    parts.push(`allowNull: false`);
-  }
+  parts.push(`allowNull: ${c.allowNull}`);
   if (c.primaryKey) {
     parts.push(`primaryKey: true`);
   }
@@ -244,14 +246,16 @@ function emitCreateTable(
     }, { transaction: ${t} });`);
 
   table.foreignKeys.forEach((fk) => {
+    const onDeleteRule = fkRuleOrCascade(fk.onDelete);
+    const onUpdateRule = fkRuleOrCascade(fk.onUpdate);
     if (fk.columns.length === 1 && fk.referencedColumns.length === 1) {
       up.push(`await queryInterface.addConstraint(${tbl}, {
         type: "foreign key",
         fields: ["${fk.columns[0]}"],
         name: "${fk.name}",
         ${fkRefOpts(fk)},
-        onDelete: ${fk.onDelete ? `"${fk.onDelete}"` : "null"},
-        onUpdate: ${fk.onUpdate ? `"${fk.onUpdate}"` : "null"},
+        onDelete: "${onDeleteRule}",
+        onUpdate: "${onUpdateRule}",
         transaction: ${t}
       });`);
     } else {
@@ -259,8 +263,8 @@ function emitCreateTable(
       const refIdent = tableSqlIdent(fk.referencedSchema, fk.referencedTable);
       const colsSql = fk.columns.map((c) => pgIdent(c)).join(", ");
       const refColsSql = fk.referencedColumns.map((c) => pgIdent(c)).join(", ");
-      const onDel = fk.onDelete ? ` ON DELETE "${fk.onDelete}"` : "";
-      const onUpd = fk.onUpdate ? ` ON UPDATE "${fk.onUpdate}"` : "";
+      const onDel = ` ON DELETE "${onDeleteRule}"`;
+      const onUpd = ` ON UPDATE "${onUpdateRule}"`;
       up.push(
         `await queryInterface.sequelize.query(\`ALTER TABLE ${tblIdent} ADD CONSTRAINT ${pgIdent(
           fk.name
@@ -692,14 +696,16 @@ export function generate(
 
     if (a.kind === "addFK") {
       const tbl = qiTable(a.tableSchema, a.tableName);
+      const onDeleteRule = fkRuleOrCascade(a.fk.onDelete);
+      const onUpdateRule = fkRuleOrCascade(a.fk.onUpdate);
       if (a.fk.columns.length === 1 && a.fk.referencedColumns.length === 1) {
         otherUp.push(`await queryInterface.addConstraint(${tbl}, {
   type: "foreign key",
   fields: ["${a.fk.columns[0]}"],
   name: "${a.fk.name}",
   ${fkRefOpts(a.fk)},
-  onDelete: ${a.fk.onDelete ? `"${a.fk.onDelete}"` : "null"},
-  onUpdate: ${a.fk.onUpdate ? `"${a.fk.onUpdate}"` : "null"},
+  onDelete: "${onDeleteRule}",
+  onUpdate: "${onUpdateRule}",
   transaction: ${t}
 });`);
       } else {
@@ -707,8 +713,8 @@ export function generate(
         const refIdent = tableSqlIdent(a.fk.referencedSchema, a.fk.referencedTable);
         const colsSql = a.fk.columns.map((c) => pgIdent(c)).join(", ");
         const refColsSql = a.fk.referencedColumns.map((c) => pgIdent(c)).join(", ");
-        const onDel = a.fk.onDelete ? ` ON DELETE "${a.fk.onDelete}"` : "";
-        const onUpd = a.fk.onUpdate ? ` ON UPDATE "${a.fk.onUpdate}"` : "";
+        const onDel = ` ON DELETE "${onDeleteRule}"`;
+        const onUpd = ` ON UPDATE "${onUpdateRule}"`;
         otherUp.push(
           `await queryInterface.sequelize.query(\`ALTER TABLE ${tblIdent} ADD CONSTRAINT ${pgIdent(
             a.fk.name
@@ -726,14 +732,16 @@ export function generate(
         `await queryInterface.removeConstraint(${tbl}, "${a.fkName}", { transaction: ${t} });`
       );
 
+      const onDeleteRule = fkRuleOrCascade(a.backup.onDelete);
+      const onUpdateRule = fkRuleOrCascade(a.backup.onUpdate);
       if (a.backup.columns.length === 1 && a.backup.referencedColumns.length === 1) {
         otherDown.unshift(`await queryInterface.addConstraint(${tbl}, {
   type: "foreign key",
   fields: ["${a.backup.columns[0]}"],
   name: "${a.backup.name}",
   ${fkRefOpts(a.backup)},
-  onDelete: ${a.backup.onDelete ? `"${a.backup.onDelete}"` : "null"},
-  onUpdate: ${a.backup.onUpdate ? `"${a.backup.onUpdate}"` : "null"},
+  onDelete: "${onDeleteRule}",
+  onUpdate: "${onUpdateRule}",
   transaction: ${t}
 });`);
       } else {
@@ -741,8 +749,8 @@ export function generate(
         const refIdent = tableSqlIdent(a.backup.referencedSchema, a.backup.referencedTable);
         const colsSql = a.backup.columns.map((c) => pgIdent(c)).join(", ");
         const refColsSql = a.backup.referencedColumns.map((c) => pgIdent(c)).join(", ");
-        const onDel = a.backup.onDelete ? ` ON DELETE "${a.backup.onDelete}"` : "";
-        const onUpd = a.backup.onUpdate ? ` ON UPDATE "${a.backup.onUpdate}"` : "";
+        const onDel = ` ON DELETE "${onDeleteRule}"`;
+        const onUpd = ` ON UPDATE "${onUpdateRule}"`;
         otherDown.unshift(
           `await queryInterface.sequelize.query(\`ALTER TABLE ${tblIdent} ADD CONSTRAINT ${pgIdent(
             a.backup.name
