@@ -2,6 +2,7 @@ import "reflect-metadata";
 
 import fs from "fs";
 import path from "path";
+import { pathToFileURL } from "node:url";
 import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
 
 import { loadSeqmigConfig, loadSequelizeConfig } from "../loaders/config-loader";
@@ -42,6 +43,11 @@ function getAllModelFiles(dir: string): string[] {
     }
   }
   return files;
+}
+
+/** Dynamic `import()` needs a file URL on Windows; bare `C:\...` paths fail. */
+function importModelFile(absPath: string): Promise<any> {
+  return import(pathToFileURL(absPath).href);
 }
 
 function toScalar(db: string): ColumnSchema["type"] {
@@ -166,7 +172,7 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
       if (fs.existsSync(`${filePath}.ts`)) filePath = `${filePath}.ts`;
       else if (fs.existsSync(`${filePath}.js`)) filePath = `${filePath}.js`;
     }
-    return import(filePath);
+    return importModelFile(path.resolve(filePath));
   };
 
   const modelsPath = seqmig.modelsPath;
@@ -174,7 +180,7 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
   const modelFiles = getAllModelFiles(modelsPath);
   const modelClasses: any[] = [];
   for (const file of modelFiles) {
-    const mod = await import(file);
+    const mod = await importModelFile(file);
     const modelClass = mod.default || Object.values(mod)[0];
     modelClasses.push(modelClass);
   }
