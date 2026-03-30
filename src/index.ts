@@ -23,8 +23,6 @@ export {
   rollbackLast,
   rebuildSnapshot,
   validateSnapshot,
-  validateDatabase,
-  pullDatabaseSnapshot,
   type GenerateMigrationOptions,
 } from "./services/migrate";
 export {
@@ -43,7 +41,6 @@ export {
   sanitizeMigrationName,
   type GenerateOptions,
 } from "./services/generator";
-export { introspectDatabase } from "./services/db-introspect";
 export type { RenameMapFile } from "./services/rename-map";
 export type {
   DatabaseSchema,
@@ -63,9 +60,7 @@ import {
   rebuildSnapshot,
   rollbackLast,
   runMigrations,
-  validateDatabase,
   validateSnapshot,
-  pullDatabaseSnapshot,
 } from "./services/migrate";
 import { listBackups, restoreBackup } from "./services/state";
 
@@ -98,11 +93,7 @@ export async function runCli() {
   program
     .command("preview")
     .description("Preview schema diff")
-    .option(
-      "--from-db",
-      "Use live PostgreSQL as baseline instead of schema-snapshot.json"
-    )
-    .action(wrap((opts: { fromDb?: boolean }) => preview({ fromDb: opts.fromDb })));
+    .action(wrap(preview));
 
   program
     .command("generate")
@@ -111,14 +102,8 @@ export async function runCli() {
       "-n, --name <slug>",
       "Slug after the timestamp, e.g. add-user-requires-password-setup"
     )
-    .option(
-      "--from-db",
-      "Diff DB (before) vs models (after); migration aligns database to models"
-    )
     .action(
-      wrap((opts: { name?: string; fromDb?: boolean }) =>
-        generateMigration({ name: opts.name, fromDb: opts.fromDb })
-      )
+      wrap((opts: { name?: string }) => generateMigration({ name: opts.name }))
     );
 
   program
@@ -152,24 +137,10 @@ export async function runCli() {
     .action(wrap(validateSnapshot));
 
   program
-    .command("validate-db")
-    .description("Validate live PostgreSQL against Sequelize models (drift)")
-    .action(wrap(validateDatabase));
-
-  program
-    .command("pull-db")
-    .description("Write schema-snapshot-db.json from current PostgreSQL")
-    .action(wrap(pullDatabaseSnapshot));
-
-  program
     .command("debug")
     .alias("summary")
     .description("Debug diff with extra high-signal stats")
-    .option(
-      "--from-db",
-      "Use live PostgreSQL as baseline instead of schema-snapshot.json"
-    )
-    .action(wrap((opts: { fromDb?: boolean }) => debugSummary({ fromDb: opts.fromDb })));
+    .action(wrap(debugSummary));
 
   program
     .command("backups")

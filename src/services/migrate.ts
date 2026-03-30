@@ -1,12 +1,9 @@
 import { execa } from "execa";
-import fs from "fs";
-import path from "path";
 import { diff } from "./diff";
-import { introspectDatabase } from "./db-introspect";
 import { generate, scaffoldEmptyMigrationFile } from "./generator";
 import { introspectModels } from "./introspect";
-import type { DatabaseSchema, MigrationAction } from "./schema-types";
-import { getSnapshotPaths, loadSnapshot, saveSnapshot } from "./state";
+import type { MigrationAction } from "./schema-types";
+import { loadSnapshot, saveSnapshot } from "./state";
 
 function summarizeActions(actions: MigrationAction[]): void {
   const byKind = new Map<string, number>();
@@ -27,7 +24,7 @@ function printWarnings(label: string, warnings: string[]) {
   warnings.forEach((w) => console.log(`  - ${w}`));
 }
 
-function schemaStats(schema: DatabaseSchema) {
+function schemaStats(schema: ReturnType<typeof loadSnapshot>) {
   let tables = 0;
   let columns = 0;
   let indexes = 0;
@@ -107,20 +104,9 @@ function enumChangeMode(
   };
 }
 
-export async function debugSummary(options?: { fromDb?: boolean }) {
-  const modeLabel = options?.fromDb
-    ? "DB (before) vs models (after)"
-    : "schema-snapshot.json (before) vs models (after)";
-
-  let before: DatabaseSchema;
-  let beforeWarnings: string[] = [];
-  if (options?.fromDb) {
-    const db = await introspectDatabase();
-    before = db.schema;
-    beforeWarnings = db.warnings;
-  } else {
-    before = loadSnapshot();
-  }
+export async function debugSummary() {
+  const modeLabel = "schema-snapshot.json (before) vs models (after)";
+  const before = loadSnapshot();
 
   const { schema: after, warnings: mw } = await introspectModels();
 
@@ -238,21 +224,12 @@ export async function debugSummary(options?: { fromDb?: boolean }) {
     });
   }
 
-  if (beforeWarnings.length)
-    printWarnings("Database introspection", beforeWarnings);
   printWarnings("Model introspection", mw);
   printWarnings("Diff", dw);
 }
 
-export async function preview(options?: { fromDb?: boolean }) {
-  let before: DatabaseSchema;
-  if (options?.fromDb) {
-    const { schema, warnings } = await introspectDatabase();
-    printWarnings("Database introspection", warnings);
-    before = schema;
-  } else {
-    before = loadSnapshot();
-  }
+export async function preview() {
+  const before = loadSnapshot();
 
   const { schema: after, warnings: mw } = await introspectModels();
   printWarnings("Model introspection", mw);
@@ -266,25 +243,13 @@ export async function preview(options?: { fromDb?: boolean }) {
 
 export type GenerateMigrationOptions = {
   name?: string;
-  /**
-   * Diff live PostgreSQL (before) vs Sequelize models (after).
-   * Default: diff snapshot file vs models.
-   */
-  fromDb?: boolean;
 };
 
 export async function generateMigration(options?: GenerateMigrationOptions) {
   const { schema: after, warnings: mw } = await introspectModels();
   printWarnings("Model introspection", mw);
 
-  let before: DatabaseSchema;
-  if (options?.fromDb) {
-    const { schema, warnings: dbw } = await introspectDatabase();
-    printWarnings("Database introspection", dbw);
-    before = schema;
-  } else {
-    before = loadSnapshot();
-  }
+  const before = loadSnapshot();
 
   const { actions, warnings: dw } = diff(before, after);
   printWarnings("Diff", dw);
@@ -371,44 +336,4 @@ export async function validateSnapshot() {
   console.log(
     "  Set MIGRATION_ALLOW_RENAME_HEURISTIC=1 for fuzzy column rename detection."
   );
-}
-
-/** Compare live PostgreSQL schema to Sequelize models (drift report). */
-export async function validateDatabase() {
-  console.log("Validating live PostgreSQL vs Sequelize models...\n");
-
-  const { schema: dbSch, warnings: dbw } = await introspectDatabase();
-  printWarnings("Database introspection", dbw);
-
-  const { schema: modelsSch, warnings: mw } = await introspectModels();
-  printWarnings("Model introspection", mw);
-
-  const { actions, warnings: dw } = diff(dbSch, modelsSch);
-  printWarnings("Diff", dw);
-
-  if (!actions.length) {
-    console.log("✓ Database matches introspected models");
-    return;
-  }
-
-  console.log(
-    "⚠️  Database differs from models (migrations may be pending or drift)."
-  );
-  summarizeActions(actions);
-  console.log(
-    `\n(${actions.length} actions — run seqmig preview --from-db for JSON)`
-  );
-}
-
-/** Write schema-snapshot-db.json under the configured snapshot dir (see .sequelizerc + .seq defaults). */
-export async function pullDatabaseSnapshot() {
-  const { schema, warnings } = await introspectDatabase();
-  printWarnings("Database introspection", warnings);
-  const { SNAPSHOT_DB_FILE } = getSnapshotPaths();
-  fs.mkdirSync(path.dirname(SNAPSHOT_DB_FILE), { recursive: true });
-  fs.writeFileSync(
-    SNAPSHOT_DB_FILE,
-    JSON.stringify({ version: 1, tables: schema.tables }, null, 2)
-  );
-  console.log("Wrote", SNAPSHOT_DB_FILE);
 }

@@ -337,6 +337,28 @@ function isManyToManyJoinTable(
   });
 }
 
+function columnsPrefixMatch(prefix: string[], full: string[]): boolean {
+  if (prefix.length > full.length) return false;
+  return prefix.every((c, i) => c === full[i]);
+}
+
+function hasCoveringConstraint(
+  fkCols: string[],
+  indexes: IndexSchema[],
+  uniques: UniqueConstraintSchema[],
+  primaryKeys: string[],
+): boolean {
+  const coveredByIndex = indexes.some((idx) =>
+    columnsPrefixMatch(fkCols, idx.columns),
+  );
+  if (coveredByIndex) return true;
+
+  const coveredByUnique = uniques.some((u) => columnsPrefixMatch(fkCols, u.columns));
+  if (coveredByUnique) return true;
+
+  return columnsPrefixMatch(fkCols, primaryKeys);
+}
+
 function getModelTableId(m: ModelCtor<Model>): {
   schema: string;
   name: string;
@@ -796,6 +818,33 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
         if (col) col.unique = false;
       });
     }
+
+    const existingIndexNames = new Set(indexes.map((idx) => idx.name));
+    const nextAvailableIndexName = (base: string): string => {
+      if (!existingIndexNames.has(base)) {
+        existingIndexNames.add(base);
+        return base;
+      }
+      let i = 2;
+      while (existingIndexNames.has(`${base}_${i}`)) i++;
+      const next = `${base}_${i}`;
+      existingIndexNames.add(next);
+      return next;
+    };
+
+    foreignKeys.forEach((fk) => {
+      if (!fk.columns.length) return;
+      if (hasCoveringConstraint(fk.columns, indexes, uniques, primaryKeys)) return;
+      const baseName = `${tableName}_${fk.columns.join("_")}_fkey_idx`;
+      indexes.push({
+        name: nextAvailableIndexName(baseName),
+        columns: [...fk.columns],
+        unique: false,
+        where: null,
+        type: null,
+        using: null,
+      });
+    });
 
     schema.tables.push({
       name: tableName,
