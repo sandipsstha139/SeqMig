@@ -38,7 +38,8 @@ function mapPgTypeToScalar(
   const base = t.replace(/\s+/g, " ");
   if (base.includes("[]")) return { scalar: "ARRAY", dbType: base.toUpperCase() };
   if (base === "uuid") return { scalar: "UUID", dbType: "UUID" };
-  if (base.includes("timestamp") || base === "date")
+  if (base === "date") return { scalar: "DATEONLY", dbType: "DATEONLY" };
+  if (base.includes("timestamp"))
     return { scalar: "DATE", dbType: base.toUpperCase() };
   if (base === "boolean") return { scalar: "BOOLEAN", dbType: "BOOLEAN" };
   if (base === "text") return { scalar: "TEXT", dbType: "TEXT" };

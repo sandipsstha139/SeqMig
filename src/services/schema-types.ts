@@ -6,6 +6,7 @@ export type ScalarType =
   | "BIGINT"
   | "BOOLEAN"
   | "DATE"
+  | "DATEONLY"
   | "FLOAT"
   | "DOUBLE"
   | "DECIMAL"

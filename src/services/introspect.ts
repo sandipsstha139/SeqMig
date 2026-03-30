@@ -58,6 +58,7 @@ function toScalar(db: string): ColumnSchema["type"] {
   if (t.includes("ARRAY")) return "ARRAY";
   if (t.startsWith("ENUM") || t.includes("ENUM(")) return "ENUM";
   if (t.includes("UUID")) return "UUID";
+  if (t.includes("DATEONLY")) return "DATEONLY";
   if (t.includes("TIMESTAMP") || t.includes("DATE")) return "DATE";
   if (t.includes("DOUBLE") || t.includes("DOUBLE PRECISION")) return "DOUBLE";
   if (t.includes("BIGINT")) return "BIGINT";
@@ -96,8 +97,19 @@ function refineDbType(raw: string, attr: Record<string, unknown>): string {
       return `DECIMAL(${precision}, 0)`;
     }
   }
+  if (key === "DATEONLY") return "DATEONLY";
 
   return raw;
+}
+
+function isVirtualAttribute(attr: Record<string, unknown>): boolean {
+  const typeObj = attr.type as
+    | { key?: unknown; constructor?: { name?: string }; toString?: () => string }
+    | undefined;
+  const key = String(typeObj?.key ?? "").toUpperCase();
+  const ctor = String(typeObj?.constructor?.name ?? "").toUpperCase();
+  const str = String(typeObj?.toString?.() ?? "").toUpperCase();
+  return key === "VIRTUAL" || ctor === "VIRTUAL" || str.includes("VIRTUAL");
 }
 
 function extractEnumValues(dbType: string): string[] | undefined {
@@ -349,7 +361,12 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
     const tableSchema = tid.schema;
     const attrs = m.getAttributes();
 
-    const columns: ColumnSchema[] = Object.entries(attrs).map(([name, a]) => {
+    const columns: ColumnSchema[] = Object.entries(attrs)
+      .filter(([, a]) => {
+        const attr = a as unknown as Record<string, unknown>;
+        return !isVirtualAttribute(attr);
+      })
+      .map(([name, a]) => {
       const attr = a as unknown as Record<string, unknown>;
       let raw = refineDbType(
         String(
@@ -421,7 +438,7 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
       }
 
       const primaryKey = !!attr.primaryKey;
-      const allowNull = primaryKey ? false : attr.allowNull !== false;
+      const allowNull = primaryKey ? false : attr.allowNull === true;
 
       const column: ColumnSchema = {
         name,

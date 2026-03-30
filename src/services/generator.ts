@@ -131,6 +131,7 @@ function mapType(dbType: string, enumValues?: string[]): string {
   const decP = dbType.match(/DECIMAL\s*\(\s*(\d+)\s*\)/i);
   if (decP) return `Sequelize.DECIMAL(${decP[1]}, 0)`;
 
+  if (upper.includes("DATEONLY")) return "Sequelize.DATEONLY";
   if (upper.includes("TIMESTAMP") || upper.includes("DATE"))
     return "Sequelize.DATE";
   if (upper.includes("UUID")) return "Sequelize.UUID";
@@ -157,9 +158,15 @@ function col(c: ColumnSchema): string {
   const parts: string[] = [];
 
   parts.push(`type: ${mapType(c.dbType, c.enumValues)}`);
-  parts.push(`allowNull: ${c.allowNull}`);
-  parts.push(`primaryKey: ${c.primaryKey}`);
-  parts.push(`unique: ${c.unique}`);
+  if (c.allowNull === false) {
+    parts.push(`allowNull: false`);
+  }
+  if (c.primaryKey) {
+    parts.push(`primaryKey: true`);
+  }
+  if (c.unique) {
+    parts.push(`unique: true`);
+  }
   if (c.autoIncrement) {
     parts.push(`autoIncrement: true`);
   }
@@ -304,6 +311,14 @@ function emitCreateTable(
   });
 
   down.push(`await queryInterface.dropTable(${tbl}, { transaction: ${t} });`);
+  const enumDrops = table.columns
+    .filter((c) => c.type === "ENUM")
+    .map((c) => {
+      const rawType = c.enumTypeName || `enum_${table.name}_${c.name}`;
+      const enumTypeIdent = pgQualifiedType(rawType);
+      return `await queryInterface.sequelize.query(\`DROP TYPE IF EXISTS ${enumTypeIdent}\`, { transaction: ${t} });`;
+    });
+  down.push(...enumDrops);
 
   return { up, down };
 }
