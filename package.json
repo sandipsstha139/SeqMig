@@ -1,11 +1,17 @@
 {
   "name": "seqmig",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Sequelize auto-migration CLI",
   "main": "dist/index.js",
   "bin": {
     "seqmig": "dist/index.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "version-packages": "changeset version",

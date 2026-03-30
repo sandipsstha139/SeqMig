@@ -24,8 +24,8 @@ export function loadSeqmigConfig(): SeqmigConfig {
     !p
       ? path.resolve(fallback)
       : path.isAbsolute(p)
-      ? p
-      : path.resolve(process.cwd(), p);
+        ? p
+        : path.resolve(process.cwd(), p);
 
   return {
     configFile: resolve(rc.config, "config/config.js"),

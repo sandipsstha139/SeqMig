@@ -2,12 +2,10 @@ import "reflect-metadata";
 
 import fs from "fs";
 import path from "path";
-import { Sequelize } from "sequelize-typescript";
-import {
-  loadSeqmigConfig,
-  loadSequelizeConfig,
-} from "../loaders/config-loader";
-import {
+import { Model, ModelCtor, Sequelize } from "sequelize-typescript";
+
+import { loadSeqmigConfig, loadSequelizeConfig } from "../loaders/config-loader";
+import type {
   CheckConstraintSchema,
   ColumnSchema,
   DatabaseSchema,
@@ -19,70 +17,19 @@ import {
 function registerRuntime() {
   try {
     require("tsx/esm");
-  } catch (e) {
+  } catch {
     console.warn("tsx not found. Only JS will load.");
   }
-}
-function toScalar(db: string): any {
-  const t = db.toUpperCase();
-  if (t.includes("ARRAY")) return "ARRAY";
-  if (t.startsWith("ENUM") || t.includes("ENUM(")) return "ENUM";
-  if (t.includes("UUID")) return "UUID";
-  if (t.includes("TIMESTAMP") || t.includes("DATE")) return "DATE";
-  if (t.includes("BIGINT")) return "BIGINT";
-  if (t.includes("INT")) return "INTEGER";
-  if (t.includes("TEXT")) return "TEXT";
-  if (t.includes("CHAR") || t.includes("STRING")) return "STRING";
-  if (t.includes("BOOLEAN")) return "BOOLEAN";
-  if (t.includes("JSONB")) return "JSONB";
-  if (t.includes("JSON")) return "JSON";
-  if (t.includes("DECIMAL")) return "DECIMAL";
-  if (t.includes("FLOAT")) return "FLOAT";
-  return "STRING";
-}
-
-function extractEnumValues(dbType: string): string[] | undefined {
-  const upper = dbType.toUpperCase();
-  if (!upper.startsWith("ENUM") && !upper.includes("ENUM(")) return undefined;
-
-  const startIdx = dbType.indexOf("(");
-  const endIdx = dbType.lastIndexOf(")");
-
-  if (startIdx === -1 || endIdx === -1) return undefined;
-
-  const inner = dbType.slice(startIdx + 1, endIdx);
-  return inner.split(",").map((v) => v.trim().replace(/^["']+|["']+$/g, ""));
-}
-
-function isManyToManyJoinTable(
-  tableName: string,
-  columns: ColumnSchema[],
-  foreignKeys: ForeignKeySchema[],
-  indexes: IndexSchema[]
-): boolean {
-  if (foreignKeys.length < 2) return false;
-  const fkColumns = foreignKeys.map((fk) => fk.column);
-  const hasCompositeUnique = indexes.some((idx) => {
-    if (!idx.unique) return false;
-    const fkInIndex = idx.columns.filter((col) => fkColumns.includes(col));
-    return fkInIndex.length >= 2;
-  });
-  return hasCompositeUnique;
 }
 
 function getAllModelFiles(dir: string): string[] {
   const files: string[] = [];
-
   if (!fs.existsSync(dir)) {
     throw new Error(`Models directory not found: ${dir}`);
   }
-
-  const items = fs.readdirSync(dir);
-
-  for (const item of items) {
+  for (const item of fs.readdirSync(dir)) {
     const fullPath = path.join(dir, item);
     const stat = fs.statSync(fullPath);
-
     if (stat.isDirectory()) {
       files.push(...getAllModelFiles(fullPath));
     } else if (
@@ -94,178 +41,319 @@ function getAllModelFiles(dir: string): string[] {
       files.push(fullPath);
     }
   }
-
   return files;
 }
 
-export async function introspect(): Promise<DatabaseSchema> {
+function toScalar(db: string): ColumnSchema["type"] {
+  const t = db.toUpperCase();
+  if (t.includes("ARRAY")) return "ARRAY";
+  if (t.startsWith("ENUM") || t.includes("ENUM(")) return "ENUM";
+  if (t.includes("UUID")) return "UUID";
+  if (t.includes("TIMESTAMP") || t.includes("DATE")) return "DATE";
+  if (t.includes("DOUBLE") || t.includes("DOUBLE PRECISION")) return "DOUBLE";
+  if (t.includes("BIGINT")) return "BIGINT";
+  if (t.includes("INT")) return "INTEGER";
+  if (t.includes("TEXT")) return "TEXT";
+  if (t.includes("SMALLINT")) return "SMALLINT";
+  if (t.includes("CHAR") || t.includes("STRING")) return "STRING";
+  if (t.includes("BOOLEAN")) return "BOOLEAN";
+  if (t.includes("JSONB")) return "JSONB";
+  if (t.includes("JSON")) return "JSON";
+  if (t.includes("DECIMAL") || t.includes("NUMERIC")) return "DECIMAL";
+  if (t.includes("FLOAT") || t.includes("REAL")) return "FLOAT";
+  return "STRING";
+}
+
+function refineDbType(raw: string, attr: Record<string, unknown>): string {
+  const typeObj = attr.type as
+    | { key?: string; options?: Record<string, unknown> }
+    | undefined;
+  if (!typeObj?.key || !typeObj.options) return raw;
+
+  const key = String(typeObj.key).toUpperCase();
+  const opts = typeObj.options as Record<string, unknown>;
+  if (key === "STRING" || key === "CHAR") {
+    const len = opts.length;
+    if (typeof len === "number") {
+      return key === "CHAR" ? `CHAR(${len})` : `VARCHAR(${len})`;
+    }
+  }
+  if (key === "DECIMAL") {
+    const precision = opts.precision;
+    const scale = opts.scale;
+    if (typeof precision === "number") {
+      if (typeof scale === "number") return `DECIMAL(${precision}, ${scale})`;
+      return `DECIMAL(${precision}, 0)`;
+    }
+  }
+
+  return raw;
+}
+
+function extractEnumValues(dbType: string): string[] | undefined {
+  const upper = dbType.toUpperCase();
+  if (!upper.startsWith("ENUM") && !upper.includes("ENUM(")) return undefined;
+
+  const startIdx = dbType.indexOf("(");
+  const endIdx = dbType.lastIndexOf(")");
+  if (startIdx === -1 || endIdx === -1) return undefined;
+
+  const inner = dbType.slice(startIdx + 1, endIdx);
+  return inner.split(",").map((v) => v.trim().replace(/^["']+|["']+$/g, ""));
+}
+
+function isManyToManyJoinTable(
+  foreignKeys: ForeignKeySchema[],
+  indexes: IndexSchema[]
+): boolean {
+  if (foreignKeys.length < 2) return false;
+  const fkColumns = foreignKeys.flatMap((fk) => fk.columns);
+  return indexes.some((idx) => {
+    if (!idx.unique) return false;
+    const fkInIndex = idx.columns.filter((col) => fkColumns.includes(col));
+    return fkInIndex.length >= 2;
+  });
+}
+
+function getModelTableId(m: ModelCtor<Model>): { schema: string; name: string } {
+  const raw = m.getTableName();
+  if (typeof raw === "string") return { schema: "public", name: raw };
+  const o = raw as { schema?: string; tableName?: string };
+  return {
+    schema: (o.schema?.trim() || "public") as string,
+    name: String(o.tableName ?? raw),
+  };
+}
+
+function resolveRefModel(
+  modelRef: unknown,
+  models: ModelCtor<Model>[]
+): ModelCtor<Model> | undefined {
+  if (typeof modelRef === "function") {
+    const M = modelRef as ModelCtor<Model>;
+    try {
+      if (M?.prototype instanceof Model) return M;
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof modelRef === "string") {
+    return models.find(
+      (mm) => mm.name === modelRef || getModelTableId(mm).name === modelRef
+    );
+  }
+  return undefined;
+}
+
+export type IntrospectModelsResult = {
+  schema: DatabaseSchema;
+  warnings: string[];
+};
+
+export async function introspectModels(): Promise<IntrospectModelsResult> {
   registerRuntime();
 
-  const cfg = loadSequelizeConfig();
-  const seqmigConfig = loadSeqmigConfig();
+  const dbCfg = loadSequelizeConfig();
+  const seqmig = loadSeqmigConfig();
 
   const sequelize = new Sequelize({
-    ...cfg,
+    ...dbCfg,
     logging: false,
   });
 
-  // Fix for sequelize-typescript require() issue
   (sequelize as any).import = (filePath: string) => {
-    // Ensures .ts extension is included
     if (!filePath.endsWith(".ts") && !filePath.endsWith(".js")) {
-      if (fs.existsSync(filePath + ".ts")) filePath = filePath + ".ts";
-      if (fs.existsSync(filePath + ".js")) filePath = filePath + ".js";
+      if (fs.existsSync(`${filePath}.ts`)) filePath = `${filePath}.ts`;
+      else if (fs.existsSync(`${filePath}.js`)) filePath = `${filePath}.js`;
     }
-
     return import(filePath);
   };
 
-  const modelsPath = path.isAbsolute(seqmigConfig.modelsPath!)
-    ? seqmigConfig.modelsPath!
-    : path.join(process.cwd(), seqmigConfig.modelsPath!);
+  const modelsPath = seqmig.modelsPath;
 
   const modelFiles = getAllModelFiles(modelsPath);
-  // FIX: manually import model classes (ESM-compatible)
-  const modelClasses = [];
-
+  const modelClasses: any[] = [];
   for (const file of modelFiles) {
-    const mod = await import(file); // dynamic import works with .ts
+    const mod = await import(file);
     const modelClass = mod.default || Object.values(mod)[0];
     modelClasses.push(modelClass);
   }
-
   sequelize.addModels(modelClasses);
 
   await sequelize.authenticate();
-  const schema: DatabaseSchema = { tables: [] };
-  const models = sequelize.models;
 
-  for (const [modelName, m] of Object.entries(models)) {
-    const tableName = String(m.getTableName());
+  const schema: DatabaseSchema = { tables: [] };
+  const warnings: string[] = [];
+  const models = sequelize.modelManager.models as ModelCtor<Model>[];
+
+  for (const m of models) {
+    const tid = getModelTableId(m);
+    const tableName = tid.name;
+    const tableSchema = tid.schema;
     const attrs = m.getAttributes();
 
-    const columns: ColumnSchema[] = Object.entries(attrs).map(
-      ([name, a]: any) => {
-        const raw = a.type?.toString() || "STRING";
+    const columns: ColumnSchema[] = Object.entries(attrs).map(([name, a]) => {
+      const attr = a as unknown as Record<string, unknown>;
+      let raw = refineDbType(
+        String(
+          (attr.type as { toString?: () => string })?.toString?.() ?? "STRING"
+        ),
+        attr
+      );
 
-        const isArray =
-          raw.toUpperCase().includes("ARRAY") ||
-          (a.type && a.type.key === "ARRAY") ||
-          (a.type && a.type.constructor && a.type.constructor.name === "ARRAY");
+      const isArray =
+        raw.toUpperCase().includes("ARRAY") ||
+        (attr.type &&
+          typeof attr.type === "object" &&
+          (attr.type as { key?: string }).key === "ARRAY") ||
+        (attr.type &&
+          typeof attr.type === "object" &&
+          (attr.type as { constructor?: { name?: string } }).constructor
+            ?.name === "ARRAY");
 
-        const isEnum =
-          raw.toUpperCase().includes("ENUM") ||
-          (a.type && a.type.key === "ENUM") ||
-          (a.type &&
-            a.type.constructor &&
-            a.type.constructor.name === "ENUM") ||
-          (a.type && a.type.values && Array.isArray(a.type.values));
+      const isEnum =
+        raw.toUpperCase().includes("ENUM") ||
+        (attr.type &&
+          typeof attr.type === "object" &&
+          (attr.type as { key?: string }).key === "ENUM") ||
+        (attr.type &&
+          typeof attr.type === "object" &&
+          (attr.type as { constructor?: { name?: string } }).constructor
+            ?.name === "ENUM") ||
+        (attr.type &&
+          typeof attr.type === "object" &&
+          Array.isArray((attr.type as { values?: unknown }).values));
 
-        let enumValues: string[] | undefined;
-        if (isEnum) {
-          if (a.type && a.type.values && Array.isArray(a.type.values)) {
-            enumValues = a.type.values;
-          } else {
-            enumValues = extractEnumValues(raw);
-          }
-        }
+      let enumValues: string[] | undefined;
+      if (isEnum) {
+        const tv = (attr.type as { values?: string[] })?.values;
+        if (Array.isArray(tv)) enumValues = tv;
+        else enumValues = extractEnumValues(raw);
+      }
 
-        let defaultValue = a.defaultValue;
-        let hasDefault = false;
+      let defaultValue: unknown = attr.defaultValue;
+      let hasDefault = false;
 
-        if (defaultValue !== null && defaultValue !== undefined) {
-          const defaultStr = String(defaultValue);
+      if (defaultValue !== null && defaultValue !== undefined) {
+        const defaultStr = String(defaultValue);
 
-          if (defaultStr.includes("::")) {
-            const beforeTypeCast = defaultStr.split("::")[0].trim();
+        if (defaultStr.includes("::")) {
+          const beforeTypeCast = defaultStr.split("::")[0].trim();
 
-            if (
-              beforeTypeCast.toUpperCase() === "NULL" ||
-              beforeTypeCast === ""
-            ) {
-              defaultValue = null;
-              hasDefault = false;
-            } else {
-              defaultValue = beforeTypeCast.replace(/^'(.*)'$/, "$1");
-              hasDefault = true;
-            }
-          } else if (defaultStr === "undefined") {
+          if (
+            beforeTypeCast.toUpperCase() === "NULL" ||
+            beforeTypeCast === ""
+          ) {
             defaultValue = null;
             hasDefault = false;
-          } else if (
-            typeof defaultValue === "function" ||
-            defaultStr === "[Function]" ||
-            defaultStr.includes("function") ||
-            defaultStr.includes("now()")
-          ) {
-            if (
-              (name === "createdAt" || name === "updatedAt") &&
-              (raw.toUpperCase().includes("DATE") ||
-                raw.toUpperCase().includes("TIMESTAMP"))
-            ) {
-              hasDefault = true;
-              defaultValue = "NOW";
-            } else if (name === "id" && raw.toUpperCase().includes("UUID")) {
-              hasDefault = true;
-              defaultValue = "UUID_FUNCTION";
-            } else {
-              defaultValue = null;
-              hasDefault = false;
-            }
           } else {
+            defaultValue = beforeTypeCast.replace(/^'(.*)'$/, "$1");
             hasDefault = true;
           }
-        }
-
-        if (!hasDefault && (name === "createdAt" || name === "updatedAt")) {
+        } else if (defaultStr === "undefined") {
+          defaultValue = null;
+          hasDefault = false;
+        } else if (
+          typeof defaultValue === "function" ||
+          defaultStr === "[Function]" ||
+          defaultStr.includes("function") ||
+          defaultStr.includes("now()")
+        ) {
           if (
-            raw.toUpperCase().includes("DATE") ||
-            raw.toUpperCase().includes("TIMESTAMP")
+            (name === "createdAt" || name === "updatedAt") &&
+            (raw.toUpperCase().includes("DATE") ||
+              raw.toUpperCase().includes("TIMESTAMP"))
           ) {
             hasDefault = true;
             defaultValue = "NOW";
+          } else if (name === "id" && raw.toUpperCase().includes("UUID")) {
+            hasDefault = true;
+            defaultValue = "UUID_FUNCTION";
+          } else {
+            defaultValue = null;
+            hasDefault = false;
           }
+        } else {
+          hasDefault = true;
         }
-
-        if (defaultValue === undefined) {
-          defaultValue = null;
-          hasDefault = false;
-        }
-
-        const allowNull = a.allowNull === false ? false : true;
-
-        const column: any = {
-          name,
-          type: isArray ? "ARRAY" : isEnum ? "ENUM" : toScalar(raw),
-          dbType: raw,
-          allowNull: allowNull,
-          primaryKey: !!a.primaryKey,
-          unique:
-            !!a.unique || a.unique === true || typeof a.unique === "string",
-          autoIncrement: !!a.autoIncrement,
-          comment: a.comment || null,
-          enumValues: enumValues,
-        };
-
-        if (hasDefault) {
-          column.defaultValue = defaultValue;
-        }
-
-        return column;
       }
-    );
+
+      if (!hasDefault && (name === "createdAt" || name === "updatedAt")) {
+        if (
+          raw.toUpperCase().includes("DATE") ||
+          raw.toUpperCase().includes("TIMESTAMP")
+        ) {
+          hasDefault = true;
+          defaultValue = "NOW";
+        }
+      }
+
+      if (defaultValue === undefined) {
+        defaultValue = null;
+        hasDefault = false;
+      }
+
+      const allowNull = attr.allowNull !== false;
+
+      const column: ColumnSchema = {
+        name,
+        type: isArray ? "ARRAY" : isEnum ? "ENUM" : toScalar(raw),
+        dbType: raw || "STRING",
+        allowNull,
+        primaryKey: !!attr.primaryKey,
+        unique:
+          !!attr.unique ||
+          attr.unique === true ||
+          typeof attr.unique === "string",
+        autoIncrement: !!attr.autoIncrement,
+        comment: (attr.comment as string | null) || null,
+        enumValues,
+      };
+
+      if (hasDefault) {
+        column.defaultValue = defaultValue;
+      }
+
+      return column;
+    });
 
     const primaryKeys = columns.filter((c) => c.primaryKey).map((c) => c.name);
 
+    const normalizeIndexField = (f: unknown): string | null => {
+      if (f == null) return null;
+      if (typeof f === "string") return f;
+      if (typeof f === "object") {
+        const o = f as Record<string, unknown>;
+        const v =
+          o.name ?? o.attribute ?? o.field ?? o.column ?? o.property ?? null;
+        if (typeof v === "string") return v;
+        if (typeof v === "number") return String(v);
+      }
+      return typeof f === "number" ? String(f) : null;
+    };
+
+    const optsAny = m.options as unknown as {
+      indexes?: Array<Record<string, unknown>>;
+    };
     const rawIndexes: IndexSchema[] =
-      (m as any).options.indexes?.map((idx: any) => ({
-        name: idx.name,
-        columns: idx.fields,
-        unique: !!idx.unique,
-        where: idx.where || null,
-        type: idx.type || null,
-        using: idx.using || null,
-      })) || [];
+      (optsAny.indexes?.map((idx) => {
+        const fields = Array.isArray((idx as any).fields)
+          ? ((idx as any).fields as unknown[])
+          : [];
+
+        const indexCols = fields
+          .map((f) => normalizeIndexField(f))
+          .filter((x): x is string => x != null);
+
+        return {
+          name: idx.name as string,
+          columns: indexCols,
+          unique: !!idx.unique,
+          where: (idx as any).where ?? null,
+          type: ((idx as any).type as string) || null,
+          using: ((idx as any).using as string) || null,
+        } as IndexSchema;
+      }) ?? []) || [];
 
     const uniques: UniqueConstraintSchema[] = [];
     const uniqueColumnNames = new Set<string>();
@@ -273,8 +361,8 @@ export async function introspect(): Promise<DatabaseSchema> {
 
     columns.forEach((col) => {
       if (col.unique && !col.primaryKey) {
-        const attr = attrs[col.name];
-        const uniqueValue = (attr as any).unique;
+        const uniqueValue = (attrs[col.name] as { unique?: unknown } | undefined)
+          ?.unique;
 
         let uniqueName: string;
         if (typeof uniqueValue === "string") {
@@ -302,19 +390,26 @@ export async function introspect(): Promise<DatabaseSchema> {
       cols.forEach((col) => uniqueColumnNames.add(col));
     });
 
-    const uniqueKeys = ((m as any).options as any)?.uniqueKeys;
+    const uniqueKeys = (m.options as {
+      uniqueKeys?: Record<string, { fields: unknown[] }>;
+    })?.uniqueKeys;
     if (uniqueKeys) {
-      Object.entries(uniqueKeys).forEach(([name, cfg]: any) => {
+      Object.entries(uniqueKeys).forEach(([name, cfg]) => {
+        const cfgFields = Array.isArray(cfg.fields)
+          ? cfg.fields
+              .map((f) => normalizeIndexField(f))
+              .filter((x): x is string => x != null)
+          : [];
         const isDuplicate = uniques.some(
           (u) =>
             u.name === name ||
-            JSON.stringify(u.columns.sort()) ===
-              JSON.stringify(cfg.fields.sort())
+            JSON.stringify([...u.columns].sort()) ===
+              JSON.stringify([...cfgFields].sort())
         );
 
         if (!isDuplicate) {
-          uniques.push({ name, columns: cfg.fields });
-          cfg.fields.forEach((field: string) => uniqueColumnNames.add(field));
+          uniques.push({ name, columns: cfgFields });
+          cfgFields.forEach((field) => uniqueColumnNames.add(field));
         }
       });
     }
@@ -324,8 +419,8 @@ export async function introspect(): Promise<DatabaseSchema> {
         const isDuplicate = uniques.some(
           (u) =>
             u.name === idx.name ||
-            JSON.stringify(u.columns.sort()) ===
-              JSON.stringify(idx.columns.sort())
+            JSON.stringify([...u.columns].sort()) ===
+              JSON.stringify([...idx.columns].sort())
         );
 
         if (!isDuplicate) {
@@ -347,18 +442,14 @@ export async function introspect(): Promise<DatabaseSchema> {
 
     const indexes = rawIndexes.filter((idx) => {
       if (idx.unique) return false;
-
-      if (idx.columns.some((col) => uniqueColumnNames.has(col))) {
-        return false;
-      }
-
       return true;
     });
 
     const checks: CheckConstraintSchema[] = [];
-    const validate = ((m as any).options as any)?.validate;
+    const validate = (m.options as { validate?: Record<string, unknown> })
+      ?.validate;
     if (validate) {
-      Object.entries(validate).forEach(([name, expr]: any) => {
+      Object.entries(validate).forEach(([name, expr]) => {
         if (typeof expr === "string") {
           checks.push({ name, expression: expr });
         }
@@ -367,32 +458,90 @@ export async function introspect(): Promise<DatabaseSchema> {
 
     const foreignKeys: ForeignKeySchema[] = [];
 
-    Object.values((m as any).associations).forEach((assoc: any) => {
-      if (assoc.associationType === "BelongsTo") {
-        const fk = assoc.foreignKey;
+    for (const [colName, rawAttr] of Object.entries(attrs)) {
+      const rattr = rawAttr as unknown as {
+        references?: { model?: unknown; key?: string };
+        onDelete?: string;
+        onUpdate?: string;
+      };
+      if (!rattr.references?.model) continue;
+      const RM = resolveRefModel(rattr.references.model, models);
+      if (!RM) {
+        warnings.push(
+          `${tableSchema}.${tableName}: column "${colName}" references unknown model (check references.model / @ForeignKey)`
+        );
+        continue;
+      }
+      const refTid = getModelTableId(RM);
+      const refCol =
+        rattr.references.key != null
+          ? String(rattr.references.key)
+          : String(RM.primaryKeyAttribute);
+      foreignKeys.push({
+        name: `${tableName}_${colName}_fkey`,
+        columns: [colName],
+        referencedTable: refTid.name,
+        referencedSchema:
+          refTid.schema === "public" ? undefined : refTid.schema,
+        referencedColumns: [refCol],
+        onDelete: (rattr.onDelete as string | undefined) ?? "CASCADE",
+        onUpdate: (rattr.onUpdate as string | undefined) ?? "CASCADE",
+      });
+    }
+
+    Object.values(m.associations).forEach((assoc) => {
+      const a = assoc as unknown as {
+        associationType?: string;
+        foreignKey?: string;
+        target?: ModelCtor<Model>;
+        options?: {
+          constraintName?: string;
+          onDelete?: string;
+          onUpdate?: string;
+        };
+      };
+      if (a.associationType === "BelongsTo") {
+        const fk = a.foreignKey;
+        if (!fk) return;
         const col = columns.find((c) => c.name === fk);
         if (col) col.unique = false;
 
+        if (!a.target) return;
+        const refTid = getModelTableId(a.target);
+        const pkAttr = a.target.primaryKeyAttribute;
+        if (!pkAttr) return;
+
+        const existing = foreignKeys.find(
+          (f) => f.columns.length === 1 && f.columns[0] === fk
+        );
+        if (existing) {
+          if (a.options?.constraintName)
+            existing.name = a.options.constraintName;
+          if (a.options?.onDelete != null)
+            existing.onDelete = a.options.onDelete;
+          if (a.options?.onUpdate != null)
+            existing.onUpdate = a.options.onUpdate;
+          return;
+        }
+
         foreignKeys.push({
-          name: assoc.options?.constraintName || `${tableName}_${fk}_fkey`,
-          column: fk,
-          referencedTable: assoc.target.getTableName(),
-          referencedColumn: assoc.target.primaryKeyAttribute,
-          onDelete: assoc.options?.onDelete || "CASCADE",
-          onUpdate: assoc.options?.onUpdate || "CASCADE",
+          name:
+            a.options?.constraintName ?? `${tableName}_${fk}_fkey`,
+          columns: [fk],
+          referencedTable: refTid.name,
+          referencedSchema:
+            refTid.schema === "public" ? undefined : refTid.schema,
+          referencedColumns: [String(pkAttr)],
+          onDelete: a.options?.onDelete ?? "CASCADE",
+          onUpdate: a.options?.onUpdate ?? "CASCADE",
         });
       }
     });
 
-    const isJoinTable = isManyToManyJoinTable(
-      tableName,
-      columns,
-      foreignKeys,
-      indexes
-    );
+    const isJoinTable = isManyToManyJoinTable(foreignKeys, indexes);
 
     if (isJoinTable) {
-      const fkColumns = foreignKeys.map((fk) => fk.column);
+      const fkColumns = foreignKeys.flatMap((fk) => fk.columns);
       const mainFKs = fkColumns.slice(0, 2);
 
       const hasUniqueConstraint = uniques.some((u) => {
@@ -420,6 +569,9 @@ export async function introspect(): Promise<DatabaseSchema> {
 
     schema.tables.push({
       name: tableName,
+      schema: tableSchema,
+      tableComment:
+        (m.options as { comment?: string | null })?.comment ?? null,
       columns,
       indexes,
       foreignKeys,
@@ -429,5 +581,9 @@ export async function introspect(): Promise<DatabaseSchema> {
     });
   }
 
-  return schema;
+  return { schema, warnings };
+}
+
+export async function introspect(): Promise<DatabaseSchema> {
+  return (await introspectModels()).schema;
 }

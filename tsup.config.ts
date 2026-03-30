@@ -9,8 +9,8 @@ export default defineConfig({
   sourcemap: true,
   splitting: false,
   clean: true,
-  minify: false,
-  treeshake: false,
+  minify: true,
+  treeshake: true,
   outDir: "dist",
   external: ["ts-node"],
 });

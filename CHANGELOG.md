@@ -1,19 +1,32 @@
 # seqmig
 
+## 1.2.0
+
+### Minor Changes
+
+- Upgraded schema diff + migration generator (less churn, more correctness)
+- Added PostgreSQL baseline workflow (`--from-db`) + drift tooling
+- Added commands: `scaffold` (blank), `validate-db`, `pull-db`, `debug`/`summary`
+- Added support for table/column comments, safer enum changes (incl defaults), composite foreign keys, and `renameTable`
+
 ## 1.1.1
 
 ### Patch Changes
 
-- Updated Readme.md
+- Updated `README.md` with usage/docs improvements
+- Minor wording/format fixes (no functional behavior change)
 
 ## 1.1.0
 
 ### Minor Changes
 
-- Added pg dependecy
+- Added `pg` dependency to support PostgreSQL connectivity (required by Sequelize when using Postgres)
+- Improved installation experience for Postgres-based projects
 
 ## 1.0.0
 
 ### Major Changes
 
-- Initial Sequelize Auto Migration Generator
+- Initial release of `seqmig` CLI
+- Snapshot-based workflow: generate migrations by diffing stored schema snapshot vs Sequelize models
+- Basic migration generation for tables/columns/indexes/foreign keys/uniques/checks and primary keys
