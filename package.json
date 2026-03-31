@@ -1,6 +1,6 @@
 {
   "name": "seqmig",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Sequelize auto-migration CLI",
   "main": "dist/index.js",
   "bin": {

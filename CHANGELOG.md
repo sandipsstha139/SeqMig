@@ -1,5 +1,12 @@
 # seqmig
 
+## 2.0.3
+
+### Patch Changes
+
+- Fixed model module loading to detect and select exports that extend `sequelize-typescript` `Model` instead of relying on the first export.
+- Prevented crashes when model files export constants/enums/objects before the model class by skipping non-model exports during `sequelize.addModels(...)`.
+
 ## 2.0.2
 
 ### Patch Changes

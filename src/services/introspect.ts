@@ -53,6 +53,40 @@ function importModelFile(absPath: string): Promise<any> {
   return import(pathToFileURL(absPath).href);
 }
 
+function isModelClass(candidate: unknown): candidate is ModelCtor<Model> {
+  if (typeof candidate !== "function") return false;
+  try {
+    return candidate.prototype instanceof Model;
+  } catch {
+    return false;
+  }
+}
+
+function pickModelClassFromModule(mod: unknown): ModelCtor<Model> | undefined {
+  const moduleObject =
+    mod && (typeof mod === "object" || typeof mod === "function")
+      ? (mod as Record<string, unknown>)
+      : {};
+  const found: ModelCtor<Model>[] = [];
+
+  if (isModelClass(moduleObject.default)) {
+    found.push(moduleObject.default);
+  }
+
+  for (const value of Object.values(moduleObject)) {
+    if (isModelClass(value)) found.push(value);
+  }
+
+  const defaultExport = moduleObject.default;
+  if (defaultExport && typeof defaultExport === "object") {
+    for (const value of Object.values(defaultExport)) {
+      if (isModelClass(value)) found.push(value);
+    }
+  }
+
+  return found[0];
+}
+
 function toScalar(db: string): ColumnSchema["type"] {
   const t = db.toUpperCase();
   if (t.includes("ARRAY")) return "ARRAY";
@@ -378,12 +412,19 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
   };
 
   const modelsPath = seqmig.modelsPath;
+  const warnings: string[] = [];
 
   const modelFiles = getAllModelFiles(modelsPath);
   const modelClasses: any[] = [];
   for (const file of modelFiles) {
     const mod = await importModelFile(file);
-    const modelClass = mod.default || Object.values(mod)[0];
+    const modelClass = pickModelClassFromModule(mod);
+    if (!modelClass) {
+      warnings.push(
+        `Skipping ${path.basename(file)}: no exported class extends sequelize-typescript Model`,
+      );
+      continue;
+    }
     modelClasses.push(modelClass);
   }
   sequelize.addModels(modelClasses);
@@ -391,7 +432,6 @@ export async function introspectModels(): Promise<IntrospectModelsResult> {
   await sequelize.authenticate();
 
   const schema: DatabaseSchema = { tables: [] };
-  const warnings: string[] = [];
   const models = sequelize.modelManager.models as ModelCtor<Model>[];
 
   for (const m of models) {
